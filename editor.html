@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>IndiePlace</title>
+<style>
+:root {
+  --teal:#008080;
+  --g1:#0a246a;
+  --g2:#3a6ea5;
+}
+body {
+  margin:0;
+  font-family:Tahoma,Segoe UI,Arial,sans-serif;
+  background:var(--teal);
+  color:#000;
+}
+.header {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:8px 12px;
+  background:linear-gradient(var(--g1),var(--g2));
+  color:#fff;
+  border-bottom:2px solid #000;
+}
+.logo {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  font-weight:700;
+}
+.logo .mark {
+  width:28px;
+  height:28px;
+  border:2px solid #fff;
+  background:#ff0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:700;
+  color:#000;
+}
+.nav {
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.xp-btn {
+  background:#d4d0c8;
+  border:2px outset #fff;
+  padding:5px 10px;
+  font-size:13px;
+  cursor:pointer;
+}
+.xp-btn:active {
+  border:2px inset #fff;
+  background:#c0c0c0;
+}
+.container {
+  max-width:1100px;
+  margin:12px auto;
+  padding:0 12px;
+}
+.games-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+  gap:12px;
+  margin-top:12px;
+}
+.card {
+  background:#ece9d8;
+  border:2px ridge #fff;
+  padding:8px;
+}
+.thumb {
+  width:100%;
+  height:120px;
+  object-fit:cover;
+  border:2px inset #fff;
+  background:#06101a;
+}
+.meta {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-top:6px;
+}
+.small {
+  font-size:12px;
+  color:#333;
+}
+.modal {
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.5);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:9999;
+}
+.modal .box {
+  background:#ece9d8;
+  padding:12px;
+  border:2px ridge #fff;
+  width:560px;
+  max-height:80vh;
+  overflow:auto;
+}
+.footer {
+  max-width:1100px;
+  margin:10px auto;
+  color:#fff;
+  text-align:center;
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">
+    <div class="mark">R</div>
+    <div>IndiePlace</div>
+  </div>
+  <div class="nav">
+    <div id="userInfo" class="small">Not logged in</div>
+    <div id="coins" class="small">💎 0</div>
+    <button class="xp-btn" id="loginBtn">Sign In / Register</button>
+    <button class="xp-btn" id="editorBtn">Open Editor</button>
+    <button class="xp-btn" id="forumsBtn">Forums</button>
+    <button class="xp-btn" id="adminBtn" style="display:none">Admin Panel</button>
+  </div>
+</header>
+
+<main class="container">
+  <h2 style="margin:0 0 8px 0">Published Games</h2>
+  <div id="games" class="games-grid"></div>
+</main>
+
+<div id="modal" class="modal">
+  <div class="box">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+    <div style="text-align:right;margin-top:8px">
+      <button class="xp-btn" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="footer">Made with ❤️ — By Jeffil</div>
+
+<!-- Firebase SDK (compat for local usage) -->
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+<script>
+/* -------------------------
+   Firebase Init
+------------------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyCCnViwZKOfGTnzQDlVpF1P_c0czGFpEqo",
+  authDomain: "indieplace-9b9e9.firebaseapp.com",
+  projectId: "indieplace-9b9e9",
+  storageBucket: "indieplace-9b9e9.firebasestorage.app",
+  messagingSenderId: "677295128619",
+  appId: "1:677295128619:web:7190a5897a98bc9075ea6e"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const auth = firebase.auth();
+
+/* -------------------------
+   Bad Words List & Censorship
+------------------------- */
+const badWords = ["2 girls 1 cup","2g1c","4r5e","5h1t","5hit","a55","a_s_s","acrotomophilia","anal","anus","ass","asshole","bitch","cock","cum","cunt","dick","fag","fuck","jism","nigga","porn","pussy","shit","slut","🖕"];
+function containsBadWord(text){ return badWords.some(bw => text.toLowerCase().includes(bw.toLowerCase())); }
+function censor(text){ let censored = text; badWords.forEach(word=>{ censored=censored.replace(new RegExp(word,"gi"),"***"); }); return censored; }
+
+/* -------------------------
+   UI helpers
+------------------------- */
+function openModal(title, bodyHtml){
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = bodyHtml;
+  document.getElementById('modal').style.display='flex';
+}
+function closeModal(){ document.getElementById('modal').style.display='none'; }
+
+/* -------------------------
+   Auth
+------------------------- */
+let currentUser = null;
+
+function updateHeader(){
+  document.getElementById('userInfo').textContent = currentUser ? currentUser.email : 'Not logged in';
+  document.getElementById('coins').textContent = '💎 ' + (currentUser ? (currentUser.coins||0) : 0);
+  document.getElementById('adminBtn').style.display = (currentUser && currentUser.isAdmin) ? 'inline-block' : 'none';
+  document.getElementById('loginBtn').textContent = currentUser ? "Logout" : "Sign In / Register";
+}
+
+document.getElementById('loginBtn').addEventListener('click', async ()=>{
+  if(currentUser){ 
+    if(confirm("Logout?")) await auth.signOut(); 
+    return;
+  }
+  const action = prompt('Type "login" or "register":');
+  if(!action) return;
+  if(action.toLowerCase()==='register'){
+    const email = prompt('Enter email:'); 
+    if(!email) return alert('Email required');
+    const password = prompt('Enter password:'); 
+    if(!password) return alert('Password required');
+    try {
+      const cred = await auth.createUserWithEmailAndPassword(email, password);
+      await db.collection("users").doc(cred.user.uid).set({ coins:0, lastLogin:null, isAdmin:false });
+      alert("Registered! Logging you in...");
+    } catch(err){ alert(err.message); }
+  } else if(action.toLowerCase()==='login'){
+    const email = prompt('Enter email:'); 
+    if(!email) return alert('Email required');
+    const password = prompt('Enter password:'); 
+    if(!password) return alert('Password required');
+    try { await auth.signInWithEmailAndPassword(email,password); alert("Logged in!"); } 
+    catch(err){ alert(err.message); }
+  }
+});
+
+auth.onAuthStateChanged(async user=>{
+  if(user){
+    const doc = await db.collection("users").doc(user.uid).get();
+    if(doc.exists){ currentUser = { uid:user.uid, email:user.email, ...doc.data() }; } 
+    else { currentUser = { uid:user.uid, email:user.email, coins:0, lastLogin:null, isAdmin:false }; }
+    giveDaily();
+  } else { currentUser=null; }
+  updateHeader();
+});
+
+async function giveDaily(){
+  if(!currentUser) return;
+  const today = new Date().toDateString();
+  if(currentUser.lastLogin !== today){
+    currentUser.coins = (currentUser.coins||0)+50;
+    currentUser.lastLogin = today;
+    await db.collection("users").doc(currentUser.uid).set(currentUser,{merge:true});
+    openModal('Daily Gems','You received 50 gems for logging in today!');
+    updateHeader();
+  }
+}
+
+/* -------------------------
+   Editor, Forums, Games
+------------------------- */
+document.getElementById('editorBtn').addEventListener('click', ()=>{
+  if(!currentUser){ if(confirm('Login required. Open login?')) document.getElementById('loginBtn').click(); return; }
+  window.location.href = 'editor.html';
+});
+
+document.getElementById('forumsBtn').addEventListener('click', ()=>{
+  if(!currentUser){ alert('Login required'); return; }
+  const forums = JSON.parse(localStorage.getItem('xpForums')||'[]');
+  let html = forums.map((f,i)=>`<div style="margin-bottom:8px"><b>${f.author}</b>: ${f.title}<div>${f.content}</div></div>`).join('');
+  html += '<div style="margin-top:8px"><button class="xp-btn" onclick="addForum()">Add post</button></div>';
+  openModal('Forums', html);
+});
+
+addForum = function(){
+  const modalContent = `
+    <div>
+      <label>Title:</label><br/>
+      <input type="text" id="forumTitle" style="width:100%; margin-bottom:6px"/><br/>
+      <label>Content:</label><br/>
+      <textarea id="forumContent" style="width:100%; height:80px"></textarea><br/>
+      <div style="text-align:right; margin-top:6px">
+        <button class="xp-btn" id="submitForumBtn">Submit</button>
+        <button class="xp-btn" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+  openModal('Add Forum Post', modalContent);
+
+  const titleInput = document.getElementById('forumTitle');
+  const contentInput = document.getElementById('forumContent');
+  const submitBtn = document.getElementById('submitForumBtn');
+
+  titleInput.addEventListener('input', ()=>{ titleInput.value = censor(titleInput.value); });
+  contentInput.addEventListener('input', ()=>{ contentInput.value = censor(contentInput.value); });
+
+  submitBtn.addEventListener('click', ()=>{
+    const title = titleInput.value.trim();
+    const content = contentInput.value.trim();
+    if(!title || !content) return alert('Both title and content are required');
+    const forums = JSON.parse(localStorage.getItem('xpForums')||'[]'); 
+    forums.push({author: currentUser.email, title, content}); 
+    localStorage.setItem('xpForums', JSON.stringify(forums));
+    closeModal();
+    loadGames();
+  });
+};
+
+/* -------------------------
+   Load Published Games from Firebase
+------------------------- */
+async function loadGames(){
+  const grid = document.getElementById('games');
+  grid.innerHTML = '<div class="card">Loading...</div>';
+  try {
+    const snap = await db.collection("games").orderBy("createdAt","desc").get();
+    if(snap.empty){ grid.innerHTML = '<div class="card">No games published yet</div>'; return; }
+    grid.innerHTML = '';
+    snap.forEach(doc=>{
+      const g = doc.data();
+      const card = document.createElement('div'); card.className='card';
+      const thumbHtml = g.thumbnail ? `<img class="thumb" src="${g.thumbnail}" alt="">` : `<div class="thumb"></div>`;
+      card.innerHTML = `
+        ${thumbHtml}
+        <div style="margin-top:6px;font-weight:700">${g.name}</div>
+        <div class="meta">
+          <div class="small">By ${g.author||'Unknown'}</div>
+          <div class="small">💎 ${g.cost||10}</div>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button class="xp-btn" onclick="tryPlay('${doc.id}', ${g.cost||10})">Play</button>
+          <button class="xp-btn" onclick="viewGame('${doc.id}')">Details</button>
+        </div>`;
+      grid.appendChild(card);
+    });
+  } catch(err){ console.error(err); grid.innerHTML = '<div class="card">Error loading games</div>'; }
+}
+
+function tryPlay(id,cost){
+  if(!currentUser){ alert('Login required'); return; }
+  if((currentUser.coins||0)<(cost||10)){ alert('Not enough gems'); return; }
+  currentUser.coins -= cost||0;
+  db.collection("users").doc(currentUser.uid).set(currentUser,{merge:true});
+  localStorage.setItem('currentPlayGameId', id);
+  window.location.href='play.html';
+}
+
+async function viewGame(id){
+  const doc = await db.collection("games").doc(id).get();
+  if(!doc.exists) return alert('Not found');
+  const g = doc.data();
+  let html = `<div class="small"><b>${g.name}</b></div>`;
+  html += `<div class="small">Author: ${g.author||'Unknown'}</div>`;
+  html += `<div class="small">Cost: 💎 ${g.cost||10}</div>`;
+  html += `<div class="small">Scenes: ${Object.keys(g.scenes||{}).length}</div>`;
+  if(g.backgroundColor) html += `<div class="small">Background Color: ${g.backgroundColor}</div>`;
+  if(g.backgroundImage) html += `<div class="small">Background: Image set</div>`;
+  html += `<div style="margin-top:8px"><button class="xp-btn" onclick="closeModal(); tryPlay('${doc.id}', ${g.cost||10})">Play</button> <button class="xp-btn" onclick="closeModal()">Close</button></div>`;
+  openModal('Game Details', html);
+}
+
+/* Init */
+updateHeader();
+loadGames();
+</script>
+
+</body>
+</html>

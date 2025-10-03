@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>IndiePlace — Play Game</title>
+<style>
+body{
+    margin:0;
+    font-family:Tahoma,Segoe UI,Arial,sans-serif;
+    background:#222;
+    color:#fff;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+}
+.top{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:8px;
+    background:linear-gradient(#0a246a,#3a6ea5);
+    color:#fff;
+    width:100%;
+}
+.xp-btn{
+    background:#d4d0c8;
+    border:2px outset #fff;
+    padding:5px 10px;
+    cursor:pointer;
+}
+.xp-btn:active{
+    border:2px inset #fff;
+}
+canvas{
+    border:2px solid #555;
+    background:#111;
+    display:block;
+    margin:8px auto;
+}
+.small{
+    font-size:13px;
+    color:#ddd;
+    text-align:center;
+}
+#sceneControls{
+    margin:5px;
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+    <button class="xp-btn" onclick="goBack()">← Back</button>
+    <div style="font-weight:700;margin-left:8px">IndiePlace — Player</div>
+</div>
+
+<div id="sceneControls">
+    <button class="xp-btn" onclick="prevScene()">Prev Scene</button>
+    <button class="xp-btn" onclick="nextScene()">Next Scene</button>
+    <button class="xp-btn" onclick="goEditor()">Go to Editor</button>
+    <span id="currentSceneName"></span>
+</div>
+
+<canvas id="gameCanvas" width="900" height="540"></canvas>
+<div class="small">Use arrow keys to move; ↑ or W to jump; click buttons/text objects.</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameData = null;
+let sceneNames = [];
+let currentSceneIndex = 0;
+let player = null;
+let keys = {};
+let gravity = 0.8;
+let imageCache = {};
+let mouse = {x:0, y:0, clicked:false};
+
+// --- Image Preloader ---
+function preloadImage(src){
+    if(!imageCache[src]){
+        const img = new Image();
+        img.src = src;
+        imageCache[src] = img;
+    }
+    return imageCache[src];
+}
+
+// --- Load game ---
+function loadGame(){
+    // Updated: support currentPlayGameId from index.html
+    const gameId = localStorage.getItem("currentPlayGameId") || localStorage.getItem("currentPlayGame");
+    if(!gameId){
+        alert("No game selected"); 
+        window.location.href="index.html"; 
+        return;
+    }
+
+    const data = localStorage.getItem("miniGame_" + gameId);
+    if(!data){
+        alert("Game not found"); 
+        window.location.href="index.html"; 
+        return;
+    }
+
+    gameData = JSON.parse(data);
+    sceneNames = Object.keys(gameData.scenes||{});
+    if(sceneNames.length === 0){
+        alert("No scenes in game");
+        window.location.href="index.html";
+        return;
+    }
+
+    currentSceneIndex = 0;
+    loadScene(currentSceneIndex);
+    requestAnimationFrame(gameLoop);
+}
+
+// --- Load scene ---
+function loadScene(index){
+    currentSceneIndex = index;
+    const scene = gameData.scenes[sceneNames[currentSceneIndex]] || [];
+    player = scene.find(o => o.type==="player") || {x:50,y:50,width:40,height:40,color:"#0f0",dx:0,dy:0,onGround:false};
+    document.getElementById("currentSceneName").textContent = "Scene: "+sceneNames[currentSceneIndex];
+
+    if(gameData.backgroundImage) preloadImage(gameData.backgroundImage);
+    scene.forEach(o=>{
+        if(o.sprite) preloadImage(o.sprite);
+    });
+}
+
+// --- Scene Controls ---
+function prevScene(){ if(currentSceneIndex > 0) loadScene(currentSceneIndex-1); }
+function nextScene(){ if(currentSceneIndex < sceneNames.length-1) loadScene(currentSceneIndex+1); }
+
+window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+canvas.addEventListener("mousedown", e => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left;
+    mouse.y = e.clientY - rect.top;
+    mouse.clicked = true;
+});
+canvas.addEventListener("mouseup", () => mouse.clicked = false);
+
+// --- Game Loop ---
+function gameLoop(){
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+// --- Update ---
+function update(){
+    if(!player) return;
+    const scene = gameData.scenes[sceneNames[currentSceneIndex]];
+
+    // movement
+    player.dx = 0;
+    if(keys["arrowleft"] || keys["a"]) player.dx = -5;
+    if(keys["arrowright"] || keys["d"]) player.dx = 5;
+    if((keys["arrowup"] || keys["w"]) && player.onGround){ player.dy=-15; player.onGround=false; }
+
+    player.dy += gravity;
+    player.x += player.dx;
+    player.y += player.dy;
+    player.onGround = false;
+
+    // collisions
+    scene.forEach(obj=>{
+        if(obj.type==="platform"){
+            if(player.x + player.width > obj.x && player.x < obj.x + obj.width &&
+               player.y + player.height > obj.y && player.y + player.height - player.dy <= obj.y){
+                player.y = obj.y - player.height;
+                player.dy = 0;
+                player.onGround = true;
+            }
+        }
+        if(obj.type==="death" && rectCollide(player,obj)) resetPlayer();
+        if(obj.type==="goal" && rectCollide(player,obj)){ alert("Goal reached!"); resetPlayer(); }
+
+        if(obj.type==="enemy"){
+            obj.dx = obj.dx || 2;
+            obj.x += obj.dx;
+            if(obj.x < 0 || obj.x + obj.width > canvas.width) obj.dx = -obj.dx;
+            if(rectCollide(player,obj)) resetPlayer();
+        }
+
+        if((obj.type==="button" || obj.type==="text") && mouse.clicked){
+            if(mouse.x >= obj.x && mouse.x <= obj.x + obj.width &&
+               mouse.y >= obj.y && mouse.y <= obj.y + obj.height){
+                alert("Clicked: "+(obj.emoji||""));
+                mouse.clicked = false;
+            }
+        }
+    });
+}
+
+function resetPlayer(){
+    player.x = 50; player.y = 50; player.dx = 0; player.dy = 0;
+}
+
+// --- Draw ---
+function draw(){
+    const scene = gameData.scenes[sceneNames[currentSceneIndex]];
+
+    // background
+    if(gameData.backgroundImage && imageCache[gameData.backgroundImage] && imageCache[gameData.backgroundImage].complete){
+        ctx.drawImage(imageCache[gameData.backgroundImage],0,0,canvas.width,canvas.height);
+    } else {
+        ctx.fillStyle = gameData.backgroundColor || "#111";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+    }
+
+    scene.forEach(o=>{
+        if(o.sprite && imageCache[o.sprite] && imageCache[o.sprite].complete){
+            ctx.drawImage(imageCache[o.sprite],o.x,o.y,o.width,o.height);
+        } else if(o.type==="text" || o.type==="button"){
+            ctx.fillStyle = o.color || "#fff";
+            ctx.font = `${o.height||20}px sans-serif`;
+            ctx.textBaseline = "top";
+            ctx.fillText(o.emoji||"", o.x, o.y);
+            if(o.type==="button"){ ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.strokeRect(o.x,o.y,o.width,o.height); }
+        } else {
+            ctx.fillStyle = o.color || "#fff";
+            ctx.fillRect(o.x,o.y,o.width,o.height);
+        }
+    });
+
+    if(player){
+        ctx.fillStyle = player.color || "#0f0";
+        ctx.fillRect(player.x,player.y,player.width,player.height);
+    }
+}
+
+// --- Collision helper ---
+function rectCollide(a,b){
+    return a.x < b.x+b.width && a.x+a.width > b.x &&
+           a.y < b.y+b.height && a.y+a.height > b.y;
+}
+
+// --- Back + Editor ---
+function goBack(){ if(confirm("Exit game?")) window.location.href="index.html"; }
+function goEditor(){ window.location.href="editor.html"; }
+
+// --- Start ---
+loadGame();
+</script>
+
+</body>
+</html>
